@@ -17,6 +17,7 @@ jobs:
         with:
           persist-credentials: false
       - run: ./tests/run-diagnostics.sh
+      - run: python3 tests/test_socket_close.py
   build:
     needs: diagnostics-test
     runs-on: ubuntu-latest

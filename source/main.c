@@ -74,6 +74,7 @@ void __appInit(void)
         .udp_rx_buf_size = 0xA500,
         .sb_efficiency = 8,
     };
+    diagnostics_log("variant=shrink-before-close pr=cathery/sys-ftpd/34");
     diagnostics_log("socket.init.begin tcp_tx=%u tcp_rx=%u tcp_tx_max=%u tcp_rx_max=%u efficiency=%u",
         socketInitConfig.tcp_tx_buf_size, socketInitConfig.tcp_rx_buf_size,
         socketInitConfig.tcp_tx_buf_max_size, socketInitConfig.tcp_rx_buf_max_size,

@@ -423,14 +423,32 @@ ftp_set_socket_options(int fd)
     return 0;
 }
 
+// Workaround from cathery/sys-ftpd PR #34 (nyanpasu64, f63c4a2).
+// HOS can retain socket buffers after close. Shrink data-socket buffers only
+// after shutdown/drain, so transfers keep their original buffer sizes.
+static void
+ftp_shrink_socket(int fd)
+{
+    int stub_buffersize = 1;
+    int rc = setsockopt(fd, SOL_SOCKET, SO_RCVBUF,
+                        &stub_buffersize, sizeof(stub_buffersize));
+    diagnostic_event("socket.shrink.receive", NULL, fd, rc);
+    rc = setsockopt(fd, SOL_SOCKET, SO_SNDBUF,
+                    &stub_buffersize, sizeof(stub_buffersize));
+    diagnostic_event("socket.shrink.send", NULL, fd, rc);
+    // Even if either option fails, the caller must still close the socket.
+}
+
 /*! close a socket
  *
  *  @param[in] fd        socket to close
  *  @param[in] connected whether this socket is connected
+ *  @param[in] shrink    release large data-socket buffers before close
  */
 static void
 ftp_closesocket(int fd,
-                bool connected)
+                bool connected,
+                bool shrink)
 {
     int rc;
     struct sockaddr_in addr;
@@ -479,6 +497,9 @@ ftp_closesocket(int fd,
         console_print(RED "setsockopt: SO_LINGER %d %s\n" RESET,
                       errno, strerror(errno));
 
+    if (shrink)
+        ftp_shrink_socket(fd);
+
     /* close socket */
     rc = close(fd);
     diagnostic_event("socket.close", NULL, fd, rc);
@@ -495,7 +516,7 @@ ftp_session_close_cmd(ftp_session_t* session)
 {
     /* close command socket */
     if (session->cmd_fd >= 0)
-        ftp_closesocket(session->cmd_fd, true);
+        ftp_closesocket(session->cmd_fd, true, false);
     session->cmd_fd = -1;
 }
 
@@ -513,7 +534,7 @@ ftp_session_close_pasv(ftp_session_t* session)
                       inet_ntoa(session->pasv_addr.sin_addr),
                       ntohs(session->pasv_addr.sin_port));
 
-        ftp_closesocket(session->pasv_fd, false);
+        ftp_closesocket(session->pasv_fd, false, true);
     }
 
     session->pasv_fd = -1;
@@ -528,7 +549,7 @@ ftp_session_close_data(ftp_session_t* session)
 {
     /* close data connection */
     if (session->data_fd >= 0 && session->data_fd != session->cmd_fd)
-        ftp_closesocket(session->data_fd, true);
+        ftp_closesocket(session->data_fd, true, true);
     session->data_fd = -1;
 
     /* clear send/recv flags */
@@ -1306,7 +1327,7 @@ ftp_session_new(int listen_fd)
     {
         diagnostic_event("session.allocate.failed", NULL, new_fd, -1);
         console_print(RED "failed to allocate session\n" RESET);
-        ftp_closesocket(new_fd, true);
+        ftp_closesocket(new_fd, true, false);
         return -1;
     }
 
@@ -1392,7 +1413,7 @@ ftp_session_accept(ftp_session_t* session)
         rc = ftp_set_socket_nonblocking(new_fd);
         if (rc != 0)
         {
-            ftp_closesocket(new_fd, true);
+            ftp_closesocket(new_fd, true, true);
             ftp_session_set_state(session, COMMAND_STATE, CLOSE_PASV | CLOSE_DATA);
             ftp_send_response(session, 425, "Failed to establish connection\r\n");
             return -1;
@@ -1441,7 +1462,7 @@ ftp_session_connect(ftp_session_t* session)
     rc = ftp_set_socket_options(session->data_fd);
     if (rc != 0)
     {
-        ftp_closesocket(session->data_fd, false);
+        ftp_closesocket(session->data_fd, false, true);
         session->data_fd = -1;
         return -1;
     }
@@ -1459,7 +1480,7 @@ ftp_session_connect(ftp_session_t* session)
         if (errno != EINPROGRESS)
         {
             console_print(RED "connect: %d %s\n" RESET, errno, strerror(errno));
-            ftp_closesocket(session->data_fd, false);
+            ftp_closesocket(session->data_fd, false, true);
             session->data_fd = -1;
             return -1;
         }
@@ -2103,7 +2124,7 @@ void ftp_exit(void)
 
     /* stop listening for new clients */
     if (listenfd >= 0)
-        ftp_closesocket(listenfd, false);
+        ftp_closesocket(listenfd, false, false);
 
     /* deinitialize socket driver */
     console_render();

@@ -33,6 +33,24 @@ Output: `out/atmosphere/contents/420000000000000E/exefs.nsp`, boot flag,
 and configuration. GitHub Actions uploads `sys-ftpd-fw23-diagnostic.zip` and the ELF
 as build artifacts; it does not publish untested builds as stable releases.
 
+### Socket-buffer workaround under test
+
+This build adds the close-time workaround from
+[cathery/sys-ftpd PR #34](https://github.com/cathery/sys-ftpd/pull/34)
+by nyanpasu64 (commit `f63c4a2`). It requests 1-byte receive/send buffers for
+passive listeners and data connections immediately before close, after the
+existing shutdown/drain sequence. Command connections and the server listener
+are unchanged. Both options are attempted even if one fails; close always runs.
+Heap size, initialization buffers, and transfer-time buffers are unchanged.
+Diagnostic events `socket.shrink.receive` and `socket.shrink.send` record results.
+This remains an experimental workaround until the new build is tested on hardware.
+
+Baseline on the user's HOS 22.5.0 console: PASV socket creation failed with
+`errno=105` (`ENOBUFS`) at accepted session 14, with one active session and 13
+already destroyed. The same process accepted another session about 17 seconds
+later. Logs show the failure location; the upstream PR provides the proposed
+explanation and workaround. HOS 23.x hardware behavior has not been tested here.
+
 ### Diagnostic build
 
 The ZIP now includes `config/sys-ftpd/diagnostics_enabled`. Install this empty
