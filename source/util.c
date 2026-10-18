@@ -13,6 +13,7 @@ static PadState pad = {0};
 
 bool isHidHandheld()
 {
+    padUpdate(&pad);
     return padIsHandheld(&pad);
 }
 

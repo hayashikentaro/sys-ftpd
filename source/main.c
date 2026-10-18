@@ -22,9 +22,7 @@
 #define SOCK_BUFFERSIZE 16384
 
 
-///old
-///#define HEAP_SIZE 0xA7000
-#define HEAP_SIZE 0x000540000
+#define HEAP_SIZE 0x540000
 
 // We aren't an applet.
 u32 __nx_applet_type = AppletType_None;
@@ -48,42 +46,30 @@ void __libnx_initheap(void)
 void __appInit(void)
 {
     R_ASSERT(smInitialize());
+    // Set the HOS version before any version-dependent service initialization.
+    R_ASSERT(setsysInitialize());
+    SetSysFirmwareVersion fw;
+    Result firmware_result = setsysGetFirmwareVersion(&fw);
+    setsysExit();
+    R_ASSERT(firmware_result);
+    hosversionSet(MAKEHOSVERSION(fw.major, fw.minor, fw.micro));
+
     R_ASSERT(fsInitialize());
     R_ASSERT(fsdevMountSdmc());
     R_ASSERT(timeInitialize());
     R_ASSERT(hidInitialize());
-    R_ASSERT(hidsysInitialize());
-    R_ASSERT(setsysInitialize());
-    SetSysFirmwareVersion fw;
-    if (R_SUCCEEDED(setsysGetFirmwareVersion(&fw)))
-        hosversionSet(MAKEHOSVERSION(fw.major, fw.minor, fw.micro));
-    setsysExit();
+    initPads();
+    // LED notifications are optional; FTP must work without hid:sys.
+    hidsysInitialize();
 
     static const SocketInitConfig socketInitConfig = {
-/* old         
-		.tcp_tx_buf_size = 0x800,
-        .tcp_rx_buf_size = 0x800,		
-        .tcp_tx_buf_max_size = 0x25000,
-        .tcp_rx_buf_max_size = 0x25000,
-        //We don't use UDP, set all UDP buffers to 0
-        .udp_tx_buf_size = 0,
-        .udp_rx_buf_size = 0,
-        .sb_efficiency = 1,
-*/		
-		
-      .tcp_tx_buf_size = 8 * SOCK_BUFFERSIZE,
-      .tcp_rx_buf_size = 8 * SOCK_BUFFERSIZE,
-      .tcp_tx_buf_max_size = 16 * SOCK_BUFFERSIZE,
-      .tcp_rx_buf_max_size = 16 * SOCK_BUFFERSIZE,
-      .udp_tx_buf_size = 0x2400,
-      .udp_rx_buf_size = 0xA500,
-      .sb_efficiency = 8,		
-		
-		
-		
-		
-		
-		
+        .tcp_tx_buf_size = 8 * SOCK_BUFFERSIZE,
+        .tcp_rx_buf_size = 8 * SOCK_BUFFERSIZE,
+        .tcp_tx_buf_max_size = 16 * SOCK_BUFFERSIZE,
+        .tcp_rx_buf_max_size = 16 * SOCK_BUFFERSIZE,
+        .udp_tx_buf_size = 0x2400,
+        .udp_rx_buf_size = 0xA500,
+        .sb_efficiency = 8,
     };
     R_ASSERT(socketInitialize(&socketInitConfig));
     smExit();
@@ -92,6 +78,8 @@ void __appInit(void)
 void __appExit(void)
 {
     socketExit();
+    hidsysExit();
+    hidExit();
     timeExit();
     fsdevUnmountAll();
     fsExit();
@@ -103,9 +91,7 @@ static loop_status_t loop(loop_status_t (*callback)(void))
 
     while (true)
     {
-		///old 
-        ///svcSleepThread(1e+7);
-		svcSleepThread(10000000L);
+        svcSleepThread(10000000L);
         status = callback();
         console_render();
         if (status != LOOP_CONTINUE)

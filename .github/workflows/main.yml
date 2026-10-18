@@ -2,49 +2,32 @@ name: Build
 
 on:
   push:
-    branches: [ "*" ]
   pull_request:
-    branches: [ "*" ]
   workflow_dispatch:
   workflow_call:
-  
+
+permissions:
+  contents: read
+
 jobs:
   build:
-    name: Test build
     runs-on: ubuntu-latest
     container:
-      image: 'devkitpro/devkita64'
-      ##image: 'ghcr.io/ely3m/devkita64'
-
+      image: devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-
-      - name: build
-        run: make -j$(nproc)
-        
-      - name: test
+      - name: Build
+        run: make -j2
+      - name: Package SD card files
         run: |
-          pwd
-          ls -la 
-          ls -la out
-        
-      - name: Zipping up Release folder
-        run: zip -r release.zip out
-
-      - name: get date/date 
-        env:
-          TZ: "America/Chicago"
-        run: | 
-          echo "NOW=$(date +'%m-%d-%Y-%I.%M.%S.%p')" >> $GITHUB_ENV
-        
-      - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+          cd out
+          zip -r ../sys-ftpd-fw23-test.zip atmosphere config
+      - uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ env.NOW }}
-          prerelease: false
-          draft: false
-          body: ${{ github.event.head_commit.message }}
-          files: release.zip
-          name: "Switch Release ${{ env.NOW }}"
+          name: sys-ftpd-fw23-test
+          path: |
+            sys-ftpd-fw23-test.zip
+            sys-ftpd.elf
+          if-no-files-found: error

@@ -26,54 +26,20 @@ static const HidsysNotificationLedPattern breathing_pattern = {
     },
 };
 
-// Double click LED pattern.
-static const HidsysNotificationLedPattern double_click_pattern = {
-    .baseMiniCycleDuration = 0x6, // 75ms.
-    .totalMiniCycles = 0x2,       // 3 mini cycles. Last one 12.5ms.
-    .totalFullCycles = 0x1,       // 1 full cycle.
-    .startIntensity = 0xF,        // 100%.
-    .miniCycles = {
-        // First cycle
-        {
-            .ledIntensity = 0x0,      // 0%.
-            .transitionSteps = 0x0,   // Instant transition time.
-            .finalStepDuration = 0x0, // 12.5ms.
-        },
-        // Second cycle
-        {
-            .ledIntensity = 0xF,      // 100%.
-            .transitionSteps = 0x0,   // Instant transition time.
-            .finalStepDuration = 0x1, // 75ms.
-        },
-    },
-};
-
-// Single click LED pattern.
-static const HidsysNotificationLedPattern single_click_pattern = {
-    .baseMiniCycleDuration = 0x8, // 100ms.
-    .totalMiniCycles = 0x1,       // 2 mini cycles. Last one 12.5ms.
-    .totalFullCycles = 0x1,       // 1 full cycle.
-    .startIntensity = 0xF,        // 100%.
-    .miniCycles = {
-        // First cycle
-        {
-            .ledIntensity = 0x0,      // 0%.
-            .transitionSteps = 0x5,   // 3 steps. Transition time 0.5s.
-            .finalStepDuration = 0x0, // 12.5ms.
-        },
-    },
-};
-
 static void send_led_pattern(const HidsysNotificationLedPattern* pattern)
 {
-    s32 total_entries;
+    if (!serviceIsActive(hidsysGetServiceSession()))
+        return;
+
+    s32 total_entries = 0;
     HidsysUniquePadId uniquePadIds[2];
 
     const Result rc = hidsysGetUniquePadsFromNpad(isHidHandheld() ? HidNpadIdType_Handheld : HidNpadIdType_No1, uniquePadIds, 2, &total_entries);
-    if (R_FAILED(rc) && rc != MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer))
-        fatalThrow(rc);
+    // A controller/LED service failure must not terminate the FTP server.
+    if (R_FAILED(rc))
+        return;
 
-    for (int i = 0; i < total_entries; i++)
+    for (int i = 0; i < total_entries && i < 2; i++)
         hidsysSetNotificationLedPattern(pattern, uniquePadIds[i]);
 }
 

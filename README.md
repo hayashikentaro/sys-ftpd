@@ -1,5 +1,54 @@
 # sys-ftpd
 
+## FW 23 compatibility test build
+
+Fork: https://github.com/hayashikentaro/sys-ftpd
+
+This fork targets HOS 23.x. The local `nxdumptool` fork's FW 23 build was
+confirmed on hardware by its user. **This sys-ftpd build still needs its own
+hardware validation**; a successful build does not establish compatibility.
+
+Changes in this fork:
+
+- Detect HOS before initializing filesystem, time, HID, and sockets, matching
+  libnx's service initialization order. Firmware lookup failures stop startup
+  rather than continuing with an unknown version.
+- Initialize/update controller pad state before selecting the LED target.
+- Make `hid:sys` and LED enumeration failures nonfatal and bound the LED ID loop.
+- Release HID services on exit.
+
+### Build
+
+Docker must be running. The pinned image is the locally available devkitA64
+image also used for nxdumptool: libnx 4.12.0-1, devkitA64 r29.2-1 (GCC 15.2.0).
+The nxdumptool key-generation patch is specific to dumping and is not needed
+for an FTP server.
+
+```sh
+./build.sh clean
+./build.sh -j4
+```
+
+Output: `out/atmosphere/contents/420000000000000E/exefs.nsp`, boot flag,
+and configuration. GitHub Actions uploads `sys-ftpd-fw23-test.zip` and the ELF
+as build artifacts; it does not publish untested builds as stable releases.
+
+### Install and validate
+
+1. Preserve your existing `config/sys-ftpd/config.ini`. For an update, copy only
+   the ZIP's `atmosphere` directory to the SD root; copy `config` only on a new
+   installation, then set a username and password.
+2. Reboot into a CFW version compatible with your HOS version.
+3. Check that the console boots and FTP authentication works on port 5000.
+4. Check directory listing, upload, download (compare file hashes), rename,
+   delete, disconnect/reconnect, and a transfer after sleep/wake.
+5. Repeat with LED notifications enabled and disabled; record HOS, Atmosphere,
+   and any crash result/program ID. This module's ID is `420000000000000E`.
+
+If it prevents boot, remove
+`atmosphere/contents/420000000000000E/flags/boot2.flag` from the SD card
+using a computer to disable automatic startup.
+
 #### Previously sys-ftpd-light
 
 This is a lightweight FTP server that runs in the background on your Nintendo Switch.
@@ -10,7 +59,7 @@ This is a lightweight FTP server that runs in the background on your Nintendo Sw
 Since it's lightweight, it occupies less memory on your console at the cost of transferring files a bit slower. If you want to transfer large files, I would suggest you install mtheall's [ftpd](https://github.com/mtheall/ftpd) separately and run it whenever you need to make a large file transfer.
 
 ## How to use
-1. Go to the [latest release](https://github.com/ELY3M/sys-ftpd/releases/latest) and download the sys-ftpd out.zip folder. (not the source code)
+1. Go to the [latest release](https://github.com/hayashikentaro/sys-ftpd/actions) and download the `sys-ftpd-fw23-test` build artifact and extract the enclosed ZIP.
 2. Extract the contents of the folder to the root of your Nintendo Switch's SD card. (it should overlap with your existing atmosphere and config folders)
 3. Go to config/sys-ftpd/config.ini and set your username and password for the FTP server. (otherwise it won't let you connect)
    - Alternatively you can enable anonymous mode, which will let anyone in the network connect to your FTP server without credentials. (unsafe)
