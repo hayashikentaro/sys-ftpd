@@ -43,7 +43,9 @@ existing shutdown/drain sequence. Command connections and the server listener
 are unchanged. Both options are attempted even if one fails; close always runs.
 Heap size, initialization buffers, and transfer-time buffers are unchanged.
 Diagnostic events `socket.shrink.receive` and `socket.shrink.send` record results.
-This remains an experimental workaround until the new build is tested on hardware.
+Hardware testing confirmed that shrinking executes successfully, but rapid
+reconnections still encounter accept failures. See the
+[hardware comparison](docs/socket-buffer-validation.md) for results and limits.
 
 Baseline on the user's HOS 22.5.0 console: PASV socket creation failed with
 `errno=105` (`ENOBUFS`) at accepted session 14, with one active session and 13
