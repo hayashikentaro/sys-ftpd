@@ -37,6 +37,7 @@
 #define BIT(x) (1 << (x))
 #endif
 #include "console.h"
+#include "diagnostics.h"
 #include "led.h"
 #include "util.h"
 
@@ -185,6 +186,7 @@ struct ftp_session_t
     bool user_ok;
     bool pass_ok;
     bool led;
+    unsigned long diagnostic_id;
 };
 
 /*! ftp command descriptor */
@@ -306,6 +308,41 @@ static int sock_buffersize = SOCK_BUFFERSIZE;
 /*! server start time */
 static time_t start_time = 0;
 
+static unsigned long diagnostic_next_id;
+static unsigned long diagnostic_destroyed;
+
+// Snapshot socket errors before any filesystem logging can disturb them.
+static void diagnostic_event(const char* stage, const ftp_session_t* session,
+                             int fd, long operation_result)
+{
+    if (!diagnostics_enabled())
+        return;
+    int saved_errno = errno;
+    unsigned long bsd_result = 0;
+#ifdef __SWITCH__
+    bsd_result = socketGetLastResult();
+#endif
+    unsigned int active = 0, command = 0, passive = 0, data = 0;
+    for (const ftp_session_t* it = sessions; it; it = it->next)
+    {
+        ++active;
+        command += it->cmd_fd >= 0;
+        passive += it->pasv_fd >= 0;
+        data += it->data_fd >= 0 && it->data_fd != it->cmd_fd;
+    }
+    struct mallinfo heap = mallinfo();
+    diagnostics_log("stage=%s session=%lu fd=%d rc=%ld errno=%d bsd_result=0x%08lx "
+                    "active=%u accepted=%lu destroyed=%lu command=%u passive=%u data=%u "
+                    "heap_used=%zu heap_free=%zu state=%d port=%u",
+        stage, session ? session->diagnostic_id : 0, fd, operation_result,
+        operation_result < 0 ? saved_errno : 0, bsd_result,
+        active, diagnostic_next_id, diagnostic_destroyed, command, passive, data,
+        (size_t)heap.uordblks, (size_t)heap.fordblks,
+        session ? (int)session->state : -1,
+        session ? ntohs(session->pasv_addr.sin_port) : 0);
+    errno = saved_errno;
+}
+
 /*! Allocate a new data port
  *
  *  @returns next data port
@@ -368,6 +405,7 @@ ftp_set_socket_options(int fd)
                     &sock_buffersize, sizeof(sock_buffersize));
     if (rc != 0)
     {
+        diagnostic_event("socket.SO_RCVBUF.failed", NULL, fd, -1);
         console_print(RED "setsockopt: SO_RCVBUF %d %s\n" RESET, errno, strerror(errno));
         return -1;
     }
@@ -377,6 +415,7 @@ ftp_set_socket_options(int fd)
                     &sock_buffersize, sizeof(sock_buffersize));
     if (rc != 0)
     {
+        diagnostic_event("socket.SO_SNDBUF.failed", NULL, fd, -1);
         console_print(RED "setsockopt: SO_SNDBUF %d %s\n" RESET, errno, strerror(errno));
         return -1;
     }
@@ -416,7 +455,10 @@ ftp_closesocket(int fd,
         /* shutdown connection */
         rc = shutdown(fd, SHUT_WR);
         if (rc != 0)
+        {
+            diagnostic_event("socket.shutdown.failed", NULL, fd, rc);
             console_print(RED "shutdown: %d %s\n" RESET, errno, strerror(errno));
+        }
 
         /* wait for client to close connection */
         pollinfo.fd = fd;
@@ -439,6 +481,7 @@ ftp_closesocket(int fd,
 
     /* close socket */
     rc = close(fd);
+    diagnostic_event("socket.close", NULL, fd, rc);
     if (rc != 0)
         console_print(RED "close: %d %s\n" RESET, errno, strerror(errno));
 }
@@ -1134,6 +1177,8 @@ ftp_send_response_buffer(ftp_session_t* session,
     to_send = len;
     console_print(GREEN "%s" RESET, buffer);
     rc = send(session->cmd_fd, buffer, to_send, 0);
+    if (rc < 0 || rc != to_send)
+        diagnostic_event("session.reply.send.failed", session, session->cmd_fd, rc < 0 ? -1 : rc);
     if (rc < 0)
     {
         console_print(RED "send: %d %s\n" RESET, errno, strerror(errno));
@@ -1166,6 +1211,8 @@ ftp_send_response(ftp_session_t* session,
 
     if (session->cmd_fd < 0)
         return;
+
+    diagnostics_log("reply session=%lu code=%d", session->diagnostic_id, code);
 
     /* print response code and message to buffer */
     va_start(ap, fmt);
@@ -1219,6 +1266,9 @@ ftp_session_destroy(ftp_session_t* session)
             sessions->prev = session->prev;
     }
 
+    ++diagnostic_destroyed;
+    diagnostic_event("session.destroy", session, -1, 0);
+
     /* deallocate */
     free(session);
 
@@ -1242,6 +1292,7 @@ ftp_session_new(int listen_fd)
     new_fd = accept(listen_fd, (struct sockaddr*)&addr, &addrlen);
     if (new_fd < 0)
     {
+        diagnostic_event("socket.accept.failed", NULL, listen_fd, -1);
         console_print(RED "accept: %d %s\n" RESET, errno, strerror(errno));
         return -1;
     }
@@ -1253,12 +1304,14 @@ ftp_session_new(int listen_fd)
     session = (ftp_session_t*)calloc(1, sizeof(ftp_session_t));
     if (session == NULL)
     {
+        diagnostic_event("session.allocate.failed", NULL, new_fd, -1);
         console_print(RED "failed to allocate session\n" RESET);
         ftp_closesocket(new_fd, true);
         return -1;
     }
 
     /* initialize session */
+    session->diagnostic_id = ++diagnostic_next_id;
     strcpy(session->cwd, "/");
     session->peer_addr.sin_addr.s_addr = INADDR_ANY;
     session->cmd_fd = new_fd;
@@ -1282,6 +1335,8 @@ ftp_session_new(int listen_fd)
         session->prev = sessions->prev;
         sessions->prev = session;
     }
+
+    diagnostic_event("session.accepted", session, new_fd, new_fd);
 
     /* copy socket address to pasv address */
     addrlen = sizeof(session->pasv_addr);
@@ -1324,6 +1379,7 @@ ftp_session_accept(ftp_session_t* session)
 
         /* accept connection from peer */
         new_fd = accept(session->pasv_fd, (struct sockaddr*)&addr, &addrlen);
+        diagnostic_event("pasv.accept", session, session->pasv_fd, new_fd);
         if (new_fd < 0)
         {
             console_print(RED "accept: %d %s\n" RESET, errno, strerror(errno));
@@ -1495,6 +1551,8 @@ ftp_session_read_command(ftp_session_t* session,
 
     /* retrieve command data */
     rc = recv(session->cmd_fd, buffer, len, 0);
+    if (rc <= 0)
+        diagnostic_event("session.command.recv", session, session->cmd_fd, rc);
     if (rc < 0)
     {
         /* error retrieving command */
@@ -1699,6 +1757,7 @@ ftp_session_poll(ftp_session_t* session)
     rc = poll(pollinfo, nfds, 0);
     if (rc < 0)
     {
+        diagnostic_event("session.poll.failed", session, session->cmd_fd, rc);
         console_print(RED "poll: %d %s\n" RESET, errno, strerror(errno));
         ftp_session_close_cmd(session);
     }
@@ -1714,6 +1773,7 @@ ftp_session_poll(ftp_session_t* session)
             /* we need to read a new command */
             if (pollinfo[0].revents & (POLLERR | POLLHUP))
             {
+                diagnostic_event("session.poll.hangup", session, session->cmd_fd, pollinfo[0].revents);
                 debug_print("cmd revents=0x%x\n", pollinfo[0].revents);
                 ftp_session_close_cmd(session);
             }
@@ -1968,6 +2028,7 @@ int ftp_init(void)
 
     /* allocate socket to listen for clients */
     listenfd = socket(AF_INET, SOCK_STREAM, 0);
+    diagnostic_event("server.socket", NULL, listenfd, listenfd);
     if (listenfd < 0)
     {
         console_print(RED "socket: %d %s\n" RESET, errno, strerror(errno));
@@ -1998,6 +2059,7 @@ int ftp_init(void)
 
     /* bind socket to listen address */
     rc = bind(listenfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
+    diagnostic_event("server.bind", NULL, listenfd, rc);
     if (rc != 0)
     {
         console_print(RED "bind: %d %s\n" RESET, errno, strerror(errno));
@@ -2007,12 +2069,15 @@ int ftp_init(void)
 
     /* listen on socket */
     rc = listen(listenfd, 5);
+    diagnostic_event("server.listen", NULL, listenfd, rc);
     if (rc != 0)
     {
         console_print(RED "listen: %d %s\n" RESET, errno, strerror(errno));
         ftp_exit();
         return -1;
     }
+
+    diagnostic_event("server.listening", NULL, listenfd, 0);
 
     /* print server address */
     rc = update_status();
@@ -2029,6 +2094,7 @@ int ftp_init(void)
 void ftp_exit(void)
 {
 
+    diagnostic_event("server.cleanup", NULL, listenfd, 0);
     debug_print("exiting ftp server\n");
 
     /* clean up all sessions */
@@ -2068,6 +2134,7 @@ ftp_loop(void)
     rc = poll(&pollinfo, 1, 0);
     if (rc < 0)
     {
+        diagnostic_event("server.poll.failed", NULL, listenfd, rc);
         /* wifi got disabled */
         console_print(RED "poll: FAILED!\n" RESET);
 
@@ -2084,6 +2151,7 @@ ftp_loop(void)
             /* we got a new client */
             if (ftp_session_new(listenfd) != 0)
             {
+                diagnostic_event("server.accept.restart", NULL, listenfd, -1);
                 return LOOP_RESTART;
             }
         }
@@ -3460,6 +3528,7 @@ FTP_DECLARE(PASV)
     if (!is_session_authenticated(session))
         return;
 
+    diagnostic_event("pasv.begin", session, session->pasv_fd, 0);
     memset(buffer, 0, sizeof(buffer));
 
     /* reset the state */
@@ -3468,6 +3537,7 @@ FTP_DECLARE(PASV)
 
     /* create a socket to listen on */
     session->pasv_fd = socket(AF_INET, SOCK_STREAM, 0);
+    diagnostic_event("pasv.socket", session, session->pasv_fd, session->pasv_fd);
     if (session->pasv_fd < 0)
     {
         console_print(RED "socket: %d %s\n" RESET, errno, strerror(errno));
@@ -3477,6 +3547,7 @@ FTP_DECLARE(PASV)
 
     /* set the socket options */
     rc = ftp_set_socket_options(session->pasv_fd);
+    diagnostic_event("pasv.options", session, session->pasv_fd, rc);
     if (rc != 0)
     {
         /* failed to set socket options */
@@ -3497,6 +3568,7 @@ FTP_DECLARE(PASV)
     /* bind to the port */
     rc = bind(session->pasv_fd, (struct sockaddr*)&session->pasv_addr,
               sizeof(session->pasv_addr));
+    diagnostic_event("pasv.bind", session, session->pasv_fd, rc);
     if (rc != 0)
     {
         /* failed to bind */
@@ -3508,6 +3580,7 @@ FTP_DECLARE(PASV)
 
     /* listen on the socket */
     rc = listen(session->pasv_fd, 1);
+    diagnostic_event("pasv.listen", session, session->pasv_fd, rc);
     if (rc != 0)
     {
         /* failed to listen */
@@ -3523,6 +3596,7 @@ FTP_DECLARE(PASV)
         socklen_t addrlen = sizeof(session->pasv_addr);
         rc = getsockname(session->pasv_fd, (struct sockaddr*)&session->pasv_addr,
                          &addrlen);
+        diagnostic_event("pasv.getsockname", session, session->pasv_fd, rc);
         if (rc != 0)
         {
             /* failed to get socket address */
@@ -3539,6 +3613,7 @@ FTP_DECLARE(PASV)
                   inet_ntoa(session->pasv_addr.sin_addr),
                   ntohs(session->pasv_addr.sin_port));
     session->flags |= SESSION_PASV;
+    diagnostic_event("pasv.ready", session, session->pasv_fd, 0);
 
     /* print the address in the ftp format */
     port = ntohs(session->pasv_addr.sin_port);
@@ -4175,7 +4250,7 @@ FTP_DECLARE(USER)
  */
 FTP_DECLARE(PASS)
 {
-    console_print(CYAN "%s %s\n" RESET, __func__, args ? args : "");
+    console_print(CYAN "%s [redacted]\n" RESET, __func__);
     char str_anony[2];
     ini_gets("Anonymous", "anonymous:", "0", str_anony, sizearray(str_anony), CONFIGPATH);
     if (*str_anony == '1')

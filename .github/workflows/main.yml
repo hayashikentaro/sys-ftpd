@@ -10,7 +10,15 @@ permissions:
   contents: read
 
 jobs:
+  diagnostics-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: ./tests/run-diagnostics.sh
   build:
+    needs: diagnostics-test
     runs-on: ubuntu-latest
     container:
       image: devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
@@ -23,11 +31,11 @@ jobs:
       - name: Package SD card files
         run: |
           cd out
-          zip -r ../sys-ftpd-fw23-test.zip atmosphere config
+          zip -r ../sys-ftpd-fw23-diagnostic.zip atmosphere config
       - uses: actions/upload-artifact@v4
         with:
-          name: sys-ftpd-fw23-test
+          name: sys-ftpd-fw23-diagnostic
           path: |
-            sys-ftpd-fw23-test.zip
+            sys-ftpd-fw23-diagnostic.zip
             sys-ftpd.elf
           if-no-files-found: error

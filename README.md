@@ -30,8 +30,38 @@ for an FTP server.
 ```
 
 Output: `out/atmosphere/contents/420000000000000E/exefs.nsp`, boot flag,
-and configuration. GitHub Actions uploads `sys-ftpd-fw23-test.zip` and the ELF
+and configuration. GitHub Actions uploads `sys-ftpd-fw23-diagnostic.zip` and the ELF
 as build artifacts; it does not publish untested builds as stable releases.
+
+### Diagnostic build
+
+The ZIP now includes `config/sys-ftpd/diagnostics_enabled`. Install this empty
+marker alongside the new executable, then reboot into CFW to start diagnostics.
+The marker does not change your existing login configuration.
+
+Logs: `config/sys-ftpd/logs/diagnostic.log` and `diagnostic.previous.log`.
+The previous boot's current log is preserved at startup; size rotation keeps
+approximately 2 MiB per file (plus the last record). Each record is closed to
+make it available for FTP download. Remove the marker and reboot to disable.
+
+Records include firmware/build, PASV socket/options/bind/listen/getsockname
+results, errno on failure, the last libnx BSD result, socket descriptors,
+session IDs/counts, heap allocated/free bytes, response codes, socket closes,
+and server restart/exit events. Heap free bytes describe the C allocator arena,
+not BSD/kernel free memory. A BSD result is the last result and may be stale on
+success. Diagnostic records exclude command arguments and credentials.
+
+The existing optional verbose logger was also fixed to preserve errno, avoid
+replacing stdout/stderr, and tolerate an unavailable log file. Its password
+command logging is now redacted. The diagnostic marker does not enable this
+verbose logger.
+
+Initial hardware checks passed upload/download (including a 1 MiB binary and
+an empty file), rename/delete, and 12 reconnects spaced one second apart.
+A rapid connection sequence produced a transient PASV 451 and a connection
+reset, then recovered without intervention. The cause is **not established**;
+this diagnostic build retains socket sizes and connection behavior to gather
+evidence. Sleep/wake remains untested.
 
 ### Install and validate
 
@@ -59,7 +89,7 @@ This is a lightweight FTP server that runs in the background on your Nintendo Sw
 Since it's lightweight, it occupies less memory on your console at the cost of transferring files a bit slower. If you want to transfer large files, I would suggest you install mtheall's [ftpd](https://github.com/mtheall/ftpd) separately and run it whenever you need to make a large file transfer.
 
 ## How to use
-1. Go to the [latest release](https://github.com/hayashikentaro/sys-ftpd/actions) and download the `sys-ftpd-fw23-test` build artifact and extract the enclosed ZIP.
+1. Go to the [latest release](https://github.com/hayashikentaro/sys-ftpd/actions) and download the `sys-ftpd-fw23-diagnostic` build artifact and extract the enclosed ZIP.
 2. Extract the contents of the folder to the root of your Nintendo Switch's SD card. (it should overlap with your existing atmosphere and config folders)
 3. Go to config/sys-ftpd/config.ini and set your username and password for the FTP server. (otherwise it won't let you connect)
    - Alternatively you can enable anonymous mode, which will let anyone in the network connect to your FTP server without credentials. (unsafe)

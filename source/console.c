@@ -21,32 +21,36 @@ void console_set_status(const char* fmt, ...)
 {
 }
 
-void console_print(const char* fmt, ...)
+// Logging must never replace stdout/stderr or alter the caller's errno.
+static void write_log(const char* fmt, va_list ap)
 {
+    int saved_errno = errno;
     if (should_log)
     {
-        stdout = stderr = fopen("/config/sys-ftpd/logs/ftpd.log", "a");
-        va_list ap;
-        va_start(ap, fmt);
-        vprintf(fmt, ap);
-        va_end(ap);
-        fclose(stdout);
+        FILE* fp = fopen("/config/sys-ftpd/logs/ftpd.log", "a");
+        if (fp)
+        {
+            vfprintf(fp, fmt, ap);
+            fclose(fp);
+        }
     }
+    errno = saved_errno;
+}
+
+void console_print(const char* fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    write_log(fmt, ap);
+    va_end(ap);
 }
 
 void debug_print(const char* fmt, ...)
 {
-    if (should_log)
-    {
-        stdout = stderr = fopen("/config/sys-ftpd/logs/ftpd.log", "a");
-#ifdef ENABLE_LOGGING
-        va_list ap;
-        va_start(ap, fmt);
-        vfprintf(stderr, fmt, ap);
-        va_end(ap);
-#endif
-        fclose(stdout);
-    }
+    va_list ap;
+    va_start(ap, fmt);
+    write_log(fmt, ap);
+    va_end(ap);
 }
 
 void console_render(void)

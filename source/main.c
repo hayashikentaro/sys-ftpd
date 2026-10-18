@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "console.h"
+#include "diagnostics.h"
 #include "ftp.h"
 #include <errno.h>
 #include <malloc.h>
@@ -56,6 +57,8 @@ void __appInit(void)
 
     R_ASSERT(fsInitialize());
     R_ASSERT(fsdevMountSdmc());
+    diagnostics_init();
+    diagnostics_log("firmware=%u.%u.%u heap_capacity=%u", fw.major, fw.minor, fw.micro, HEAP_SIZE);
     R_ASSERT(timeInitialize());
     R_ASSERT(hidInitialize());
     initPads();
@@ -71,12 +74,19 @@ void __appInit(void)
         .udp_rx_buf_size = 0xA500,
         .sb_efficiency = 8,
     };
-    R_ASSERT(socketInitialize(&socketInitConfig));
+    diagnostics_log("socket.init.begin tcp_tx=%u tcp_rx=%u tcp_tx_max=%u tcp_rx_max=%u efficiency=%u",
+        socketInitConfig.tcp_tx_buf_size, socketInitConfig.tcp_rx_buf_size,
+        socketInitConfig.tcp_tx_buf_max_size, socketInitConfig.tcp_rx_buf_max_size,
+        socketInitConfig.sb_efficiency);
+    Result socket_result = socketInitialize(&socketInitConfig);
+    diagnostics_log("socket.init.end result=0x%08x", socket_result);
+    R_ASSERT(socket_result);
     smExit();
 }
 
 void __appExit(void)
 {
+    diagnostics_log("services.exit");
     socketExit();
     hidsysExit();
     hidExit();
@@ -126,13 +136,18 @@ int main(int argc, char** argv)
         {
             /* ftp loop */
             status = loop(ftp_loop);
+            diagnostics_log("server.loop.end status=%d", status);
 
             /* done with ftp */
             ftp_exit();
         }
         else
+        {
+            diagnostics_log("server.init.failed");
             status = LOOP_EXIT;
+        }
     }
+    diagnostics_log("server.exit status=%d", status);
     ftp_post_exit();
 
     return 0;
